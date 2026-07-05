@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+import sys
+from xml.etree.ElementTree import Element, SubElement, tostring
+from xml.dom.minidom import parseString
+
+urls = [l.strip() for l in sys.stdin if l.strip() and not l.startswith("#")]
+
+opml = Element("opml", version="2.0")
+head = SubElement(opml, "head")
+SubElement(head, "title").text = "feeds"
+body = SubElement(opml, "body")
+
+for url in urls:
+    SubElement(body, "outline", type="rss", xmlUrl=url)
+
+print(parseString(tostring(opml)).toprettyxml(indent="  "))
