@@ -16,13 +16,29 @@ URLS="${URLS:-$CONFIG_DIR/rss_urls.txt}"
 
 mkdir -p "$CONFIG_DIR" "$CACHE_DIR"
 
+open_url() {
+    local url wid
+    read -r url
+    if ! command -v surf &>/dev/null; then
+        xdg-open "$url"
+        return
+    fi
+    wid=$(xdotool search --class surf 2>/dev/null | head -1)
+    if [ -n "$wid" ]; then
+        xprop -id "$wid" -f _SURF_URI 8s -set _SURF_URI "$url"
+        xdotool windowactivate "$wid"
+    else
+        WEBKIT_DISABLE_DMABUF_RENDERER=1 surf "$url" &
+    fi
+}
+
 browse() {
     grep -v '^#' | fzf \
       --delimiter=$'\t' \
       --with-nth=1,2,3 \
       --preview='printf "%b" {5}' \
       --preview-window=right:40%:wrap \
-      | cut -f4 | xargs xdg-open
+      | cut -f4 | open_url
 }
 
 if [ ! -s "$FEEDS" ] || [ -z "$(find "$FEEDS" -mtime -1 2>/dev/null)" ]; then
