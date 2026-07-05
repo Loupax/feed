@@ -25,8 +25,8 @@ open_url() {
     fi
     wid=$(xdotool search --class surf 2>/dev/null | head -1)
     if [ -n "$wid" ]; then
-        xprop -id "$wid" -f _SURF_URI 8s -set _SURF_URI "$url"
-        xdotool windowactivate "$wid"
+        xdotool windowactivate --sync "$wid"
+        xprop -id "$wid" -f _SURF_GO 8s -set _SURF_GO "$url"
     else
         WEBKIT_DISABLE_DMABUF_RENDERER=1 surf "$url" &
     fi
