@@ -10,19 +10,27 @@ shift $((OPTIND - 1))
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/feed"
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/feed"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/feed"
 FEEDS="${FEEDS:-${1:-$CACHE_DIR/feeds.tsv}}"
 RSSF="$(dirname "$0")/rss-fetch"
 URLS="${URLS:-$CONFIG_DIR/rss_urls.txt}"
+SEEN="$DATA_DIR/seen.txt"
 
-mkdir -p "$CONFIG_DIR" "$CACHE_DIR"
+mkdir -p "$CONFIG_DIR" "$CACHE_DIR" "$DATA_DIR"
+
+filter_seen() {
+    [ -s "$SEEN" ] && grep -vFf "$SEEN" || cat
+}
+
+RELOAD="grep -v '^#' \"$FEEDS\" | { [ -s \"$SEEN\" ] && grep -vFf \"$SEEN\" || cat; }"
 
 browse() {
-    grep -v '^#' | fzf \
+    grep -v '^#' | filter_seen | fzf \
       --delimiter=$'\t' \
       --with-nth=1,2,3 \
       --preview='printf "%b" {5}' \
       --preview-window=right:40%:wrap \
-      | cut -f4 | xargs xdg-open
+      --bind="enter:execute(echo {4} >> \"$SEEN\" && xdg-open {4})+reload($RELOAD)"
 }
 
 if [ ! -s "$FEEDS" ] || [ -z "$(find "$FEEDS" -mtime -1 2>/dev/null)" ]; then
