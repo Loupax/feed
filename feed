@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+
+while getopts "u:f:" opt; do
+    case $opt in
+        u) URLS="$OPTARG" ;;
+        f) FEEDS="$OPTARG" ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/feed"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/feed"
+FEEDS="${FEEDS:-${1:-$CACHE_DIR/feeds.tsv}}"
+RSSF="$(dirname "$0")/rss-fetch"
+URLS="${URLS:-$CONFIG_DIR/rss_urls.txt}"
+
+mkdir -p "$CONFIG_DIR" "$CACHE_DIR"
+
+browse() {
+    grep -v '^#' | fzf \
+      --delimiter=$'\t' \
+      --with-nth=1,2,3 \
+      --preview='echo {5}' \
+      --preview-window=right:40%:wrap \
+      | cut -f4 | xargs xdg-open
+}
+
+if [ ! -s "$FEEDS" ] || [ -z "$(find "$FEEDS" -mtime -1 2>/dev/null)" ]; then
+    "$RSSF" < "$URLS" | tee "$FEEDS" | browse
+else
+    browse < "$FEEDS"
+fi
