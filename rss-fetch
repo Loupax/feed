@@ -28,13 +28,18 @@ def parse_date(s):
 
 
 def strip_html(s):
-    s = re.sub(r"<[^>]+>", " ", s)
+    s = re.sub(r"<br\s*/?>", "\n", s, flags=re.IGNORECASE)
+    s = re.sub(r"<li\s*/?>", "\n- ", s, flags=re.IGNORECASE)
+    s = re.sub(r"</(p|div|h[1-6]|ul|ol|blockquote|tr)>", "\n", s, flags=re.IGNORECASE)
+    s = re.sub(r"<[^>]+>", "", s)
     s = re.sub(r"&amp;", "&", s)
     s = re.sub(r"&lt;", "<", s)
     s = re.sub(r"&gt;", ">", s)
     s = re.sub(r"&quot;", '"', s)
     s = re.sub(r"&#?\w+;", " ", s)
-    return re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r" *\n", "\n", s)
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    return s.strip()
 
 
 def fetch(url):
@@ -114,7 +119,7 @@ def main():
 
     for date, channel, title, link, blurb in all_items:
         date_str = date.strftime("%Y-%m-%d %H:%M") if date != EPOCH else "?          "
-        print(f"{date_str}\t{channel}\t{title}\t{link}\t{blurb}")
+        print(f"{date_str}\t{channel}\t{title}\t{link}\t{blurb.replace(chr(10), r'\n')}")
 
 
 if __name__ == "__main__":

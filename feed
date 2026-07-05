@@ -20,7 +20,7 @@ browse() {
     grep -v '^#' | fzf \
       --delimiter=$'\t' \
       --with-nth=1,2,3 \
-      --preview='echo {5}' \
+      --preview='printf "%b" {5}' \
       --preview-window=right:40%:wrap \
       | cut -f4 | xargs xdg-open
 }
