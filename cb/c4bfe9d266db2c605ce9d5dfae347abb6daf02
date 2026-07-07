@@ -1,0 +1,19 @@
+README.md
+  s_5b3e77e762935a::t_e3785462b7338d 3-5,9,14-16,32-37,43-44,46-47,51,53-63,71,84-85,88-103,108,110,116,127,134,154-164
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "cbc4bfe9d266db2c605ce9d5dfae347abb6daf02",
+  "prompts": {},
+  "sessions": {
+    "s_5b3e77e762935a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a520ba45-efd0-4330-b4a8-26063ab71d83",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Konstantinos Loupasakis <konstantinos.loupasakis@deliveryhero.com>"
+    }
+  }
+}
