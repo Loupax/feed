@@ -1,0 +1,29 @@
+yt-auth/main.go
+  s_5b3e77e762935a::t_fcae3527e0b5e6 598
+  s_5b3e77e762935a::t_bc6b989039a161 648
+  s_5b3e77e762935a::t_9e7fdded9db4f0 595,597,599-602,612-634
+  s_5b3e77e762935a::t_186f7170d157e9 706-707,709-745
+  s_5b3e77e762935a::t_dd96fa30a1bd7b 603-611
+  s_5b3e77e762935a::t_bfda7154d534d8 666-682,684-704
+  s_5b3e77e762935a::t_53825748f33a20 683
+  s_5b3e77e762935a::t_ec667ec61e2636 646-647,649-659
+  s_5b3e77e762935a::t_1097e900769274 708
+  s_5b3e77e762935a::t_efd27688dc1d66 791-793,797-798,802,805-810
+  s_5b3e77e762935a::t_da30138ad49530 705
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "4d9ed73a78848dd078e6f6b01ed17ddb6630423a",
+  "prompts": {},
+  "sessions": {
+    "s_5b3e77e762935a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a520ba45-efd0-4330-b4a8-26063ab71d83",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Konstantinos Loupasakis <konstantinos.loupasakis@deliveryhero.com>"
+    }
+  }
+}
