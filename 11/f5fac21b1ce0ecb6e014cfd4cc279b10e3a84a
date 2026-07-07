@@ -1,0 +1,33 @@
+yt-auth/main.go
+  s_5b3e77e762935a::t_7dd47b8dc7a5eb 652,656-661
+  s_5b3e77e762935a::t_97257949272937 676
+  s_5b3e77e762935a::t_958d017422f768 44-45
+  s_5b3e77e762935a::t_f19e0c1f363551 772-778
+  s_5b3e77e762935a::t_731d82832f0d3a 690-691,694-697
+  s_5b3e77e762935a::t_e173de6871756d 438,441,449,452-464,466-467,469-470,477-483,487,490-491,496-543
+  s_5b3e77e762935a::t_b7f3a92447b4de 574-581,583,585-586,588-591,593-595,597,599
+  s_5b3e77e762935a::t_a3a4aa653726d2 724-725
+  s_5b3e77e762935a::t_fbc9aa3333a861 544,619-621,623,627-632
+  s_5b3e77e762935a::t_393ae6180bf0c5 573
+  s_5b3e77e762935a::t_875250d6cd6f4f 545
+  s_5b3e77e762935a::t_7b6281a110752c 633
+  s_5b3e77e762935a::t_d1a5f10d6167a7 662
+feed
+  s_5b3e77e762935a::t_cc8787e4dd1f28 43-49,52-56,58-60,62-68
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "11f5fac21b1ce0ecb6e014cfd4cc279b10e3a84a",
+  "prompts": {},
+  "sessions": {
+    "s_5b3e77e762935a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a520ba45-efd0-4330-b4a8-26063ab71d83",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Konstantinos Loupasakis <konstantinos.loupasakis@deliveryhero.com>"
+    }
+  }
+}
