@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 
 	"golang.org/x/oauth2"
@@ -40,6 +42,25 @@ func configDir() string {
 func ytCredentialsPath() string { return filepath.Join(configDir(), "yt_credentials.json") }
 func ytTokenPath() string       { return filepath.Join(configDir(), "yt_token.json") }
 func rssURLsPath() string       { return filepath.Join(configDir(), "rss_urls.txt") }
+
+func cacheDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatal(err)
+	}
+	return filepath.Join(home, ".cache", "feed")
+}
+
+func dataDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatal(err)
+	}
+	return filepath.Join(home, ".local", "share", "feed")
+}
+
+func feedsTSVPath() string { return filepath.Join(cacheDir(), "feeds.tsv") }
+func seenPath() string     { return filepath.Join(dataDir(), "seen.txt") }
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -131,7 +152,7 @@ const pageWrap = `<!DOCTYPE html>
   </style>
 </head>
 <body>
-  <nav><a href="/youtube">YouTube</a> <a href="/reddit">Reddit</a></nav>
+  <nav><a href="/youtube">YouTube</a> <a href="/reddit">Reddit</a> <a href="/import">Import</a></nav>
   %s
 </body>
 </html>`
@@ -350,6 +371,523 @@ func registerRedditHandlers(mux *http.ServeMux) {
 }
 
 // ---------------------------------------------------------------------------
+// Feed reader
+// ---------------------------------------------------------------------------
+
+type FeedItem struct {
+	Date      string `json:"date"`
+	Channel   string `json:"channel"`
+	Title     string `json:"title"`
+	URL       string `json:"url"`
+	Summary   string `json:"summary"`
+	Thumbnail string `json:"thumbnail,omitempty"`
+}
+
+func readFeeds() ([]FeedItem, error) {
+	data, err := os.ReadFile(feedsTSVPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	seen := map[string]bool{}
+	if sd, err := os.ReadFile(seenPath()); err == nil {
+		for _, line := range strings.Split(string(sd), "\n") {
+			if u := strings.TrimSpace(line); u != "" {
+				seen[u] = true
+			}
+		}
+	}
+
+	var items []FeedItem
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "#") || strings.TrimSpace(line) == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 6)
+		if len(parts) < 4 {
+			continue
+		}
+		if seen[parts[3]] {
+			continue
+		}
+		summary, thumb := "", ""
+		if len(parts) >= 5 {
+			summary = strings.ReplaceAll(parts[4], `\n`, "\n")
+		}
+		if len(parts) == 6 {
+			thumb = parts[5]
+		}
+		items = append(items, FeedItem{
+			Date:      parts[0],
+			Channel:   parts[1],
+			Title:     parts[2],
+			URL:       parts[3],
+			Summary:   summary,
+			Thumbnail: thumb,
+		})
+	}
+	return items, nil
+}
+
+var refreshMu sync.Mutex
+
+func runRefresh() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	exe, _ = filepath.EvalSymlinks(exe)
+
+	var rssFetch string
+	for _, candidate := range []string{
+		filepath.Join(filepath.Dir(exe), "rss-fetch"),
+		filepath.Join(filepath.Dir(exe), "..", "rss-fetch"),
+	} {
+		if _, err := os.Stat(candidate); err == nil {
+			rssFetch = candidate
+			break
+		}
+	}
+	if rssFetch == "" {
+		return fmt.Errorf("rss-fetch not found near %s", exe)
+	}
+
+	urlsFile, err := os.Open(rssURLsPath())
+	if err != nil {
+		return err
+	}
+	defer urlsFile.Close()
+
+	if err := os.MkdirAll(cacheDir(), 0755); err != nil {
+		return err
+	}
+
+	outFile, err := os.Create(feedsTSVPath())
+	if err != nil {
+		return err
+	}
+	defer outFile.Close()
+
+	cmd := exec.Command(rssFetch)
+	cmd.Stdin = urlsFile
+	cmd.Stdout = outFile
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+const feedPageHTML = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Feed</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:sans-serif;background:#f5f5f5;color:#222}
+    header{
+      position:sticky;top:0;z-index:10;background:#fff;
+      border-bottom:1px solid #ddd;padding:.6rem 1rem;
+      display:flex;align-items:center;gap:.75rem
+    }
+    nav a{color:#555;text-decoration:none;font-size:.9rem}
+    nav a:hover{text-decoration:underline}
+    #q{
+      flex:1;padding:.35rem .7rem;border:1px solid #ccc;
+      border-radius:4px;font-size:.95rem
+    }
+    #status{font-size:.82rem;color:#999;white-space:nowrap}
+    #refresh{
+      padding:.35rem .9rem;background:#333;color:#fff;
+      border:none;border-radius:4px;cursor:pointer;font-size:.88rem
+    }
+    #refresh:hover{background:#111}
+    #refresh:disabled{background:#aaa;cursor:default}
+    ul{list-style:none;max-width:860px;margin:1rem auto;padding:0 1rem}
+    li{
+      background:#fff;border:1px solid #e0e0e0;border-radius:4px;
+      margin-bottom:.4rem;overflow:hidden
+    }
+    .row{
+      display:flex;align-items:center;gap:.75rem;
+      padding:.55rem .85rem;cursor:pointer
+    }
+    .row:hover{background:#fafafa}
+    .thumb{
+      width:120px;height:68px;object-fit:cover;
+      border-radius:3px;flex-shrink:0;background:#eee
+    }
+    .meta{display:flex;flex-direction:column;gap:.25rem;min-width:0}
+    .byline{display:flex;align-items:baseline;gap:.5rem}
+    .date{font-size:.76rem;color:#aaa;white-space:nowrap;flex-shrink:0}
+    .ch{
+      font-size:.8rem;color:#c00;font-weight:600;
+      white-space:nowrap;flex-shrink:0;max-width:160px;
+      overflow:hidden;text-overflow:ellipsis
+    }
+    .ttl a{color:#222;text-decoration:none;font-size:.93rem}
+    .ttl a:hover{text-decoration:underline}
+    .ttl a.seen{color:#bbb}
+    .dismiss{
+      margin-left:auto;flex-shrink:0;background:none;border:none;
+      color:#ccc;font-size:1.1rem;cursor:pointer;padding:.1rem .3rem;
+      line-height:1;border-radius:3px
+    }
+    .dismiss:hover{background:#fee;color:#c00}
+    .sum{
+      display:none;padding:.4rem .85rem .65rem;
+      font-size:.83rem;color:#555;white-space:pre-wrap;
+      border-top:1px solid #f0f0f0;line-height:1.55
+    }
+    li.open .sum{display:block}
+    .embed{display:none;padding:0 .85rem .85rem}
+    li.open .embed{display:block}
+    .embed iframe{width:100%;aspect-ratio:16/9;border:none;border-radius:3px}
+    #empty{text-align:center;color:#aaa;margin-top:5rem;font-size:.95rem}
+  </style>
+</head>
+<body>
+<header>
+  <nav><a href="/youtube">YouTube</a> &nbsp; <a href="/reddit">Reddit</a> &nbsp; <a href="/import">Import</a></nav>
+  <input id="q" type="search" placeholder="Filter…" autofocus>
+  <span id="status"></span>
+  <button id="refresh">Refresh</button>
+</header>
+<ul id="list"></ul>
+<div id="empty" hidden>No items.</div>
+<script>
+const list=document.getElementById('list');
+const status=document.getElementById('status');
+const empty=document.getElementById('empty');
+const q=document.getElementById('q');
+const btn=document.getElementById('refresh');
+
+const ROW_H=88;  // estimated px per item
+const BUFFER=8;  // extra items above/below viewport
+
+let all=[], visible=[], lastS=-1, lastE=-1, rafId=null;
+const nodes=new Map(); // index -> <li>
+
+function esc(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+                  .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function ytVideoId(url){
+  const m=url.match(/[?&]v=([A-Za-z0-9_-]{11})/)||url.match(/\/shorts\/([A-Za-z0-9_-]{11})/);
+  return m?m[1]:null;
+}
+
+function markSeen(url){
+  fetch('/api/seen',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
+}
+
+function makeItem(it){
+  const li=document.createElement('li');
+  const vid=ytVideoId(it.url);
+  li.innerHTML=
+    '<div class="row">'+
+      (it.thumbnail?'<img class="thumb" src="'+esc(it.thumbnail)+'" loading="lazy" alt="">':'')+
+      '<div class="meta">'+
+        '<div class="byline">'+
+          '<span class="date">'+esc(it.date)+'</span>'+
+          '<span class="ch">'+esc(it.channel)+'</span>'+
+        '</div>'+
+        '<span class="ttl"><a href="'+esc(it.url)+'" target="_blank" rel="noopener">'+esc(it.title)+'</a></span>'+
+      '</div>'+
+      '<button class="dismiss" title="Dismiss">×</button>'+
+    '</div>'+
+    (vid?'<div class="embed"><iframe allowfullscreen></iframe></div>':'')+
+    (!vid&&it.summary?'<div class="sum">'+esc(it.summary)+'</div>':'');
+  li.querySelector('a').addEventListener('click',()=>{
+    li.querySelector('a').classList.add('seen');
+    markSeen(it.url);
+  });
+  li.querySelector('.dismiss').addEventListener('click',()=>{
+    markSeen(it.url);
+    all=all.filter(x=>x.url!==it.url);
+    visible=visible.filter(x=>x.url!==it.url);
+    reset();
+  });
+  if(vid||it.summary){
+    li.querySelector('.row').addEventListener('click',e=>{
+      if(e.target.tagName==='A'||e.target.classList.contains('dismiss'))return;
+      const opening=!li.classList.contains('open');
+      li.classList.toggle('open');
+      if(vid){
+        const iframe=li.querySelector('iframe');
+        iframe.src=opening?'https://www.youtube.com/embed/'+vid+'?autoplay=1':'';
+      }
+    });
+  }
+  return li;
+}
+
+function paint(){
+  const listTop=list.getBoundingClientRect().top;
+  const scrolled=Math.max(0,-listTop);
+  const s=Math.max(0, Math.floor(scrolled/ROW_H)-BUFFER);
+  const e=Math.min(visible.length, Math.ceil((scrolled+window.innerHeight)/ROW_H)+BUFFER);
+  if(s===lastS && e===lastE) return;
+
+  // Remove nodes leaving from the top
+  for(let i=lastS; i<Math.min(s,lastE); i++){
+    nodes.get(i)?.remove(); nodes.delete(i);
+  }
+  // Remove nodes leaving from the bottom
+  for(let i=Math.max(e,lastS); i<lastE; i++){
+    nodes.get(i)?.remove(); nodes.delete(i);
+  }
+  // Prepend nodes entering from the top (iterate high→low so each goes before the previous)
+  const topLimit=Math.min(lastS<0?e:lastS, e);
+  for(let i=topLimit-1; i>=s; i--){
+    const node=makeItem(visible[i]);
+    nodes.set(i,node);
+    list.insertBefore(node, list.firstChild);
+  }
+  // Append nodes entering from the bottom
+  const botStart=lastS<0?s:Math.max(lastE,s);
+  for(let i=botStart; i<e; i++){
+    if(nodes.has(i)) continue;
+    const node=makeItem(visible[i]);
+    nodes.set(i,node);
+    list.appendChild(node);
+  }
+
+  list.style.paddingTop=(s*ROW_H)+'px';
+  list.style.paddingBottom=Math.max(0,(visible.length-e)*ROW_H)+'px';
+  lastS=s; lastE=e;
+  status.textContent=visible.length+' items';
+  empty.hidden=visible.length>0;
+}
+
+function reset(){
+  list.innerHTML=''; nodes.clear(); lastS=-1; lastE=-1;
+  window.scrollTo(0,0);
+  paint();
+}
+
+function schedule(){
+  if(!rafId) rafId=requestAnimationFrame(()=>{rafId=null; paint();});
+}
+
+function applyFilter(){
+  const qv=q.value.toLowerCase();
+  visible=qv
+    ? all.filter(it=>it.title.toLowerCase().includes(qv)||it.channel.toLowerCase().includes(qv))
+    : all.slice();
+  reset();
+}
+
+async function load(){
+  status.textContent='Loading…';
+  const r=await fetch('/api/feeds');
+  all=await r.json()||[];
+  visible=all.slice();
+  paint();
+}
+
+async function doRefresh(){
+  btn.disabled=true; btn.textContent='Refreshing…';
+  try{
+    const r=await fetch('/api/refresh',{method:'POST'});
+    if(!r.ok) throw new Error(await r.text());
+    all=await r.json()||[];
+    visible=all.slice();
+    reset();
+  }catch(e){status.textContent='Error: '+e.message;}
+  finally{btn.disabled=false; btn.textContent='Refresh';}
+}
+
+window.addEventListener('scroll', schedule, {passive:true});
+q.addEventListener('input', applyFilter);
+btn.addEventListener('click', doRefresh);
+load();
+</script>
+</body>
+</html>`
+
+func registerFeedHandlers(mux *http.ServeMux) {
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, feedPageHTML)
+	})
+
+	mux.HandleFunc("/api/feeds", func(w http.ResponseWriter, r *http.Request) {
+		items, err := readFeeds()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if items == nil {
+			items = []FeedItem{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(items)
+	})
+
+	mux.HandleFunc("/api/seen", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			URL string `json:"url"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.URL == "" {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if err := os.MkdirAll(dataDir(), 0755); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		f, err := os.OpenFile(seenPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer f.Close()
+		fmt.Fprintln(f, body.URL)
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("/api/refresh", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		refreshMu.Lock()
+		defer refreshMu.Unlock()
+
+		if err := runRefresh(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		items, err := readFeeds()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if items == nil {
+			items = []FeedItem{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(items)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Import
+// ---------------------------------------------------------------------------
+
+type opmlOutline struct {
+	XMLUrl   string        `xml:"xmlUrl,attr"`
+	Outlines []opmlOutline `xml:"outline"`
+}
+
+type opmlDoc struct {
+	Outlines []opmlOutline `xml:"body>outline"`
+}
+
+func parseOPML(data []byte) ([]string, error) {
+	var doc opmlDoc
+	if err := xml.Unmarshal(data, &doc); err != nil {
+		return nil, err
+	}
+	var urls []string
+	var walk func([]opmlOutline)
+	walk = func(outlines []opmlOutline) {
+		for _, o := range outlines {
+			if o.XMLUrl != "" {
+				urls = append(urls, o.XMLUrl)
+			}
+			walk(o.Outlines)
+		}
+	}
+	walk(doc.Outlines)
+	return urls, nil
+}
+
+func registerImportHandlers(mux *http.ServeMux) {
+	mux.HandleFunc("/import", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			msg := r.URL.Query().Get("msg")
+			var notice string
+			if msg != "" {
+				notice = `<p class="success">` + msg + `</p>`
+			}
+			renderPage(w, fmt.Sprintf(`
+			  <h1>Import Feeds</h1>
+			  <p>Paste RSS/Atom URLs (one per line) and/or upload an OPML file.
+			     New URLs are appended to <code>rss_urls.txt</code>.</p>
+			  <form method="POST" action="/import" enctype="multipart/form-data">
+			    <textarea name="urls" rows="10"
+			      style="width:100%%;box-sizing:border-box;font-size:0.85rem;margin-bottom:1rem;font-family:monospace"
+			      placeholder="https://example.com/feed.xml&#10;https://www.youtube.com/feeds/videos.xml?channel_id=..."></textarea>
+			    <div style="margin-bottom:1.2rem">
+			      <label style="font-size:.9rem;color:#555">OPML file: </label>
+			      <input type="file" name="opml" accept=".opml,.xml">
+			    </div>
+			    <button class="btn" style="background:#333" type="submit">Import</button>
+			  </form>%s`, notice))
+			return
+		}
+
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			http.Error(w, "form parse error: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		var urls []string
+
+		// Plain-text URLs from textarea
+		for _, line := range strings.Split(r.FormValue("urls"), "\n") {
+			if u := strings.TrimSpace(line); u != "" && !strings.HasPrefix(u, "#") {
+				urls = append(urls, u)
+			}
+		}
+
+		// OPML file
+		if file, _, err := r.FormFile("opml"); err == nil {
+			defer file.Close()
+			data := make([]byte, 10<<20)
+			n, _ := file.Read(data)
+			opmlURLs, err := parseOPML(data[:n])
+			if err != nil {
+				renderPage(w, fmt.Sprintf(`<p class="error">OPML parse error: %s</p>
+				  <a class="btn" style="background:#333" href="/import">Try again</a>`, err))
+				return
+			}
+			urls = append(urls, opmlURLs...)
+		}
+
+		if len(urls) == 0 {
+			renderPage(w, `<p class="error">No URLs found.</p>
+			  <a class="btn" style="background:#333" href="/import">Back</a>`)
+			return
+		}
+
+		added, err := appendURLs(urls)
+		if err != nil {
+			renderPage(w, fmt.Sprintf(`<p class="error">Failed to save: %s</p>
+			  <a class="btn" style="background:#333" href="/import">Try again</a>`, err))
+			return
+		}
+		http.Redirect(w, r,
+			fmt.Sprintf("/import?msg=Added+%d+URLs+(%d+new,+%d+already+present)",
+				len(urls), added, len(urls)-added),
+			http.StatusSeeOther)
+	})
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -368,18 +906,17 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/youtube", http.StatusSeeOther)
-	})
 
+	registerFeedHandlers(mux)
 	registerYouTubeHandlers(mux, ytCfg)
 	registerRedditHandlers(mux)
+	registerImportHandlers(mux)
 
 	srv := &http.Server{Addr: listenAddr, Handler: mux}
 
 	go func() {
 		fmt.Printf("Listening on http://localhost:8080\n")
-		openBrowser("http://localhost:8080/youtube")
+		openBrowser("http://localhost:8080")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
