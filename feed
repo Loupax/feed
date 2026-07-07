@@ -40,19 +40,33 @@ new_urls() {
         <([ -f "$FETCHED_URLS" ] && sort "$FETCHED_URLS" || :)
 }
 
-if [ ! -s "$FEEDS" ] || [ -z "$(find "$FEEDS" -mtime -1 2>/dev/null)" ]; then
-    # Cache missing or older than 24h — full refresh
+removed_urls() {
+    comm -23 \
+        <(sort "$FETCHED_URLS") \
+        <(grep -v '^#' "$URLS" | sort)
+}
+
+full_refresh() {
     "$RSSF" < "$URLS" | tee "$FEEDS" | browse
     cp "$URLS" "$FETCHED_URLS"
+}
+
+if [ ! -s "$FEEDS" ] || [ -z "$(find "$FEEDS" -mtime -1 2>/dev/null)" ]; then
+    # Cache missing or older than 24h — full refresh
+    full_refresh
 elif [ -f "$FETCHED_URLS" ] && [ "$URLS" -nt "$FEEDS" ]; then
-    # rss_urls.txt changed since last fetch — only fetch the new URLs
-    ADDED=$(new_urls)
-    if [ -n "$ADDED" ]; then
-        { cat "$FEEDS"; echo "$ADDED" | "$RSSF" | tee -a "$FEEDS"; } | browse
+    # rss_urls.txt changed — full refresh if URLs were removed, partial if only added
+    if [ -n "$(removed_urls)" ]; then
+        full_refresh
     else
-        browse < "$FEEDS"
+        ADDED=$(new_urls)
+        if [ -n "$ADDED" ]; then
+            { cat "$FEEDS"; echo "$ADDED" | "$RSSF" | tee -a "$FEEDS"; } | browse
+        else
+            browse < "$FEEDS"
+        fi
+        cp "$URLS" "$FETCHED_URLS"
     fi
-    cp "$URLS" "$FETCHED_URLS"
 else
     # Cache is fresh; initialise snapshot on first run with this feature
     [ -f "$FETCHED_URLS" ] || cp "$URLS" "$FETCHED_URLS" 2>/dev/null || true

@@ -41,7 +41,8 @@ func configDir() string {
 
 func ytCredentialsPath() string { return filepath.Join(configDir(), "yt_credentials.json") }
 func ytTokenPath() string       { return filepath.Join(configDir(), "yt_token.json") }
-func rssURLsPath() string       { return filepath.Join(configDir(), "rss_urls.txt") }
+func rssURLsPath() string        { return filepath.Join(configDir(), "rss_urls.txt") }
+func fetchedURLsPath() string   { return filepath.Join(cacheDir(), "fetched_urls.txt") }
 
 func cacheDir() string {
 	home, err := os.UserHomeDir()
@@ -434,48 +435,112 @@ func readFeeds() ([]FeedItem, error) {
 
 var refreshMu sync.Mutex
 
-func runRefresh() error {
+func findRSSFetch() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return err
+		return "", err
 	}
 	exe, _ = filepath.EvalSymlinks(exe)
-
-	var rssFetch string
 	for _, candidate := range []string{
 		filepath.Join(filepath.Dir(exe), "rss-fetch"),
 		filepath.Join(filepath.Dir(exe), "..", "rss-fetch"),
 	} {
 		if _, err := os.Stat(candidate); err == nil {
-			rssFetch = candidate
-			break
+			return candidate, nil
 		}
 	}
-	if rssFetch == "" {
-		return fmt.Errorf("rss-fetch not found near %s", exe)
-	}
+	return "", fmt.Errorf("rss-fetch not found near %s", exe)
+}
 
-	urlsFile, err := os.Open(rssURLsPath())
+func readURLLines(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var lines []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if l := strings.TrimSpace(line); l != "" && !strings.HasPrefix(l, "#") {
+			lines = append(lines, l)
+		}
+	}
+	return lines
+}
+
+func execRSSFetch(urls []string, appendMode bool) error {
+	rssFetch, err := findRSSFetch()
 	if err != nil {
 		return err
 	}
-	defer urlsFile.Close()
-
 	if err := os.MkdirAll(cacheDir(), 0755); err != nil {
 		return err
 	}
-
-	outFile, err := os.Create(feedsTSVPath())
+	flags := os.O_CREATE | os.O_WRONLY
+	if appendMode {
+		flags |= os.O_APPEND
+	} else {
+		flags |= os.O_TRUNC
+	}
+	out, err := os.OpenFile(feedsTSVPath(), flags, 0644)
 	if err != nil {
 		return err
 	}
-	defer outFile.Close()
+	defer out.Close()
 
 	cmd := exec.Command(rssFetch)
-	cmd.Stdin = urlsFile
-	cmd.Stdout = outFile
+	cmd.Stdin = strings.NewReader(strings.Join(urls, "\n"))
+	cmd.Stdout = out
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func runRefresh() error {
+	current := readURLLines(rssURLsPath())
+	if len(current) == 0 {
+		return fmt.Errorf("no URLs in %s", rssURLsPath())
+	}
+
+	fetched := readURLLines(fetchedURLsPath())
+	fetchedSet := make(map[string]bool, len(fetched))
+	for _, u := range fetched {
+		fetchedSet[u] = true
+	}
+	currentSet := make(map[string]bool, len(current))
+	for _, u := range current {
+		currentSet[u] = true
+	}
+
+	// Detect removed URLs
+	removed := false
+	for _, u := range fetched {
+		if !currentSet[u] {
+			removed = true
+			break
+		}
+	}
+
+	// Collect added URLs
+	var added []string
+	for _, u := range current {
+		if !fetchedSet[u] {
+			added = append(added, u)
+		}
+	}
+
+	if len(fetched) == 0 || removed {
+		// Full refresh: URLs were removed (or first run)
+		if err := execRSSFetch(current, false); err != nil {
+			return err
+		}
+	} else if len(added) > 0 {
+		// Incremental: only fetch newly added URLs
+		if err := execRSSFetch(added, true); err != nil {
+			return err
+		}
+	}
+	// else: nothing changed, no-op
+
+	// Update snapshot
+	return os.WriteFile(fetchedURLsPath(), []byte(strings.Join(current, "\n")+"\n"), 0644)
 }
 
 const feedPageHTML = `<!DOCTYPE html>
@@ -505,46 +570,33 @@ const feedPageHTML = `<!DOCTYPE html>
     }
     #refresh:hover{background:#111}
     #refresh:disabled{background:#aaa;cursor:default}
-    ul{list-style:none;max-width:860px;margin:1rem auto;padding:0 1rem}
-    li{
-      background:#fff;border:1px solid #e0e0e0;border-radius:4px;
-      margin-bottom:.4rem;overflow:hidden
+    ul{list-style:none;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1rem;padding:0 1rem 1rem;margin-top:.75rem}
+    li{background:#fff;border:1px solid #e0e0e0;border-radius:8px;overflow:hidden;cursor:pointer;transition:box-shadow .15s}
+    li:hover{box-shadow:0 2px 10px rgba(0,0,0,.12)}
+    .thumb-wrap{position:relative;aspect-ratio:16/9;background:#e8e8e8;overflow:hidden}
+    .thumb{width:100%;height:100%;object-fit:cover;display:block}
+    .meta{padding:.55rem .7rem .7rem}
+    .ttl a{
+      font-size:.9rem;font-weight:600;color:#0f0f0f;text-decoration:none;
+      display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden
     }
-    .row{
-      display:flex;align-items:center;gap:.75rem;
-      padding:.55rem .85rem;cursor:pointer
-    }
-    .row:hover{background:#fafafa}
-    .thumb{
-      width:120px;height:68px;object-fit:cover;
-      border-radius:3px;flex-shrink:0;background:#eee
-    }
-    .meta{display:flex;flex-direction:column;gap:.25rem;min-width:0}
-    .byline{display:flex;align-items:baseline;gap:.5rem}
-    .date{font-size:.76rem;color:#aaa;white-space:nowrap;flex-shrink:0}
-    .ch{
-      font-size:.8rem;color:#c00;font-weight:600;
-      white-space:nowrap;flex-shrink:0;max-width:160px;
-      overflow:hidden;text-overflow:ellipsis
-    }
-    .ttl a{color:#222;text-decoration:none;font-size:.93rem}
-    .ttl a:hover{text-decoration:underline}
+    .ttl a:hover{color:#00c}
     .ttl a.seen{color:#bbb}
+    .byline{display:flex;gap:.4rem;font-size:.75rem;color:#aaa;margin-top:.3rem;align-items:center}
+    .ch{color:#c00;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%}
     .dismiss{
-      margin-left:auto;flex-shrink:0;background:none;border:none;
-      color:#ccc;font-size:1.1rem;cursor:pointer;padding:.1rem .3rem;
-      line-height:1;border-radius:3px
+      position:absolute;top:6px;right:6px;background:rgba(0,0,0,.6);border:none;
+      color:#fff;font-size:.9rem;cursor:pointer;width:24px;height:24px;border-radius:50%;
+      display:flex;align-items:center;justify-content:center;
+      opacity:0;transition:opacity .15s;flex-shrink:0
     }
-    .dismiss:hover{background:#fee;color:#c00}
-    .sum{
-      display:none;padding:.4rem .85rem .65rem;
-      font-size:.83rem;color:#555;white-space:pre-wrap;
-      border-top:1px solid #f0f0f0;line-height:1.55
-    }
+    li:hover .dismiss{opacity:1}
+    .dismiss:hover{background:rgba(180,0,0,.85)}
+    .sum{display:none;padding:.5rem .7rem .7rem;font-size:.82rem;color:#555;white-space:pre-wrap;border-top:1px solid #f0f0f0;line-height:1.5}
     li.open .sum{display:block}
-    .embed{display:none;padding:0 .85rem .85rem}
+    .embed{display:none}
     li.open .embed{display:block}
-    .embed iframe{width:100%;aspect-ratio:16/9;border:none;border-radius:3px}
+    .embed iframe{width:100%;aspect-ratio:16/9;border:none}
     #empty{text-align:center;color:#aaa;margin-top:5rem;font-size:.95rem}
   </style>
 </head>
@@ -564,11 +616,20 @@ const empty=document.getElementById('empty');
 const q=document.getElementById('q');
 const btn=document.getElementById('refresh');
 
-const ROW_H=88;  // estimated px per item
-const BUFFER=8;  // extra items above/below viewport
+const BUFFER=3;    // extra grid rows above/below viewport
+const META_H=75;   // px of card below the thumbnail (title + channel + padding)
+const GAP=16;      // matches gap:1rem in CSS
 
+let COLS=4, ROW_H=220;  // recalculated by updateLayout()
 let all=[], visible=[], lastS=-1, lastE=-1, rafId=null;
 const nodes=new Map(); // index -> <li>
+
+function updateLayout(){
+  const w=list.offsetWidth||window.innerWidth;
+  COLS=Math.max(1,Math.floor((w+GAP)/(280+GAP)));
+  const cardW=(w-(COLS-1)*GAP)/COLS;
+  ROW_H=cardW*(9/16)+META_H+GAP;
+}
 
 function esc(s){
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
@@ -588,16 +649,16 @@ function makeItem(it){
   const li=document.createElement('li');
   const vid=ytVideoId(it.url);
   li.innerHTML=
-    '<div class="row">'+
+    '<div class="thumb-wrap">'+
       (it.thumbnail?'<img class="thumb" src="'+esc(it.thumbnail)+'" loading="lazy" alt="">':'')+
-      '<div class="meta">'+
-        '<div class="byline">'+
-          '<span class="date">'+esc(it.date)+'</span>'+
-          '<span class="ch">'+esc(it.channel)+'</span>'+
-        '</div>'+
-        '<span class="ttl"><a href="'+esc(it.url)+'" target="_blank" rel="noopener">'+esc(it.title)+'</a></span>'+
-      '</div>'+
       '<button class="dismiss" title="Dismiss">×</button>'+
+    '</div>'+
+    '<div class="meta">'+
+      '<div class="ttl"><a href="'+esc(it.url)+'" target="_blank" rel="noopener">'+esc(it.title)+'</a></div>'+
+      '<div class="byline">'+
+        '<span class="ch">'+esc(it.channel)+'</span>'+
+        '<span class="date">'+esc(it.date)+'</span>'+
+      '</div>'+
     '</div>'+
     (vid?'<div class="embed"><iframe allowfullscreen></iframe></div>':'')+
     (!vid&&it.summary?'<div class="sum">'+esc(it.summary)+'</div>':'');
@@ -612,7 +673,7 @@ function makeItem(it){
     reset();
   });
   if(vid||it.summary){
-    li.querySelector('.row').addEventListener('click',e=>{
+    li.addEventListener('click',e=>{
       if(e.target.tagName==='A'||e.target.classList.contains('dismiss'))return;
       const opening=!li.classList.contains('open');
       li.classList.toggle('open');
@@ -626,10 +687,14 @@ function makeItem(it){
 }
 
 function paint(){
+  updateLayout();
+  const totalRows=Math.ceil(visible.length/COLS);
   const listTop=list.getBoundingClientRect().top;
   const scrolled=Math.max(0,-listTop);
-  const s=Math.max(0, Math.floor(scrolled/ROW_H)-BUFFER);
-  const e=Math.min(visible.length, Math.ceil((scrolled+window.innerHeight)/ROW_H)+BUFFER);
+  const startRow=Math.max(0, Math.floor(scrolled/ROW_H)-BUFFER);
+  const endRow=Math.min(totalRows, Math.ceil((scrolled+window.innerHeight)/ROW_H)+BUFFER);
+  const s=startRow*COLS;
+  const e=Math.min(visible.length, endRow*COLS);
   if(s===lastS && e===lastE) return;
 
   // Remove nodes leaving from the top
@@ -656,8 +721,8 @@ function paint(){
     list.appendChild(node);
   }
 
-  list.style.paddingTop=(s*ROW_H)+'px';
-  list.style.paddingBottom=Math.max(0,(visible.length-e)*ROW_H)+'px';
+  list.style.paddingTop=(startRow*ROW_H)+'px';
+  list.style.paddingBottom=Math.max(0,(totalRows-endRow)*ROW_H)+'px';
   lastS=s; lastE=e;
   status.textContent=visible.length+' items';
   empty.hidden=visible.length>0;
@@ -704,6 +769,13 @@ async function doRefresh(){
 window.addEventListener('scroll', schedule, {passive:true});
 q.addEventListener('input', applyFilter);
 btn.addEventListener('click', doRefresh);
+
+let resizeTimer=null;
+window.addEventListener('resize',()=>{
+  clearTimeout(resizeTimer);
+  resizeTimer=setTimeout(()=>{list.innerHTML='';nodes.clear();lastS=-1;lastE=-1;paint();},120);
+},{passive:true});
+
 load();
 </script>
 </body>
