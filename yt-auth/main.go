@@ -592,12 +592,46 @@ const feedPageHTML = `<!DOCTYPE html>
     }
     li:hover .dismiss{opacity:1}
     .dismiss:hover{background:rgba(180,0,0,.85)}
-    .sum{display:none;padding:.5rem .7rem .7rem;font-size:.82rem;color:#555;white-space:pre-wrap;border-top:1px solid #f0f0f0;line-height:1.5}
-    li.open .sum{display:block}
-    .embed{display:none}
-    li.open .embed{display:block}
-    .embed iframe{width:100%;aspect-ratio:16/9;border:none}
+    li.active{outline:2px solid #c00;outline-offset:-2px}
     #empty{text-align:center;color:#aaa;margin-top:5rem;font-size:.95rem}
+    #panel{
+      position:fixed;top:0;right:0;bottom:0;width:900px;max-width:100vw;
+      background:#fff;border-left:1px solid #ddd;
+      display:flex;flex-direction:column;
+      transform:translateX(100%);transition:transform .25s ease;z-index:100
+    }
+    #panel-handle{
+      position:absolute;left:0;top:0;bottom:0;width:6px;
+      cursor:ew-resize;z-index:1;flex-shrink:0
+    }
+    #panel-handle::after{
+      content:'';position:absolute;left:2px;top:50%;transform:translateY(-50%);
+      width:2px;height:40px;border-radius:2px;background:#ddd;transition:background .15s
+    }
+    #panel-handle:hover::after,#panel.resizing #panel-handle::after{background:#aaa}
+    #panel.open{transform:none}
+    #panel-header{
+      display:flex;align-items:center;gap:.6rem;
+      padding:.6rem .75rem;border-bottom:1px solid #eee;flex-shrink:0
+    }
+    #panel-close{
+      background:none;border:none;font-size:1.3rem;cursor:pointer;
+      color:#666;line-height:1;padding:.1rem .3rem;margin-left:auto
+    }
+    #panel-close:hover{color:#000}
+    #panel-ch{font-size:.8rem;font-weight:600;color:#c00}
+    #panel-date{font-size:.75rem;color:#aaa}
+    #panel-body{flex:1;overflow-y:auto;padding:.75rem}
+    #panel-title{font-size:1rem;font-weight:600;margin-bottom:.75rem;line-height:1.4}
+    #panel-title a{color:#0f0f0f;text-decoration:none}
+    #panel-title a:hover{text-decoration:underline}
+    #panel-embed{margin-bottom:.75rem}
+    #panel-embed iframe{width:100%;aspect-ratio:16/9;border:none;border-radius:4px}
+    #panel-summary{font-size:.85rem;color:#444;white-space:pre-wrap;line-height:1.6}
+    #overlay{
+      display:none;position:fixed;inset:0;background:rgba(0,0,0,.25);z-index:99
+    }
+    #overlay.open{display:block}
   </style>
 </head>
 <body>
@@ -609,12 +643,106 @@ const feedPageHTML = `<!DOCTYPE html>
 </header>
 <ul id="list"></ul>
 <div id="empty" hidden>No items.</div>
+<div id="overlay"></div>
+<div id="panel">
+  <div id="panel-handle"></div>
+  <div id="panel-header">
+    <span id="panel-ch"></span>
+    <span id="panel-date"></span>
+    <button id="panel-close">×</button>
+  </div>
+  <div id="panel-body">
+    <div id="panel-title"></div>
+    <div id="panel-embed"></div>
+    <div id="panel-summary"></div>
+  </div>
+</div>
 <script>
 const list=document.getElementById('list');
 const status=document.getElementById('status');
 const empty=document.getElementById('empty');
 const q=document.getElementById('q');
 const btn=document.getElementById('refresh');
+const panel=document.getElementById('panel');
+const overlay=document.getElementById('overlay');
+const panelCh=document.getElementById('panel-ch');
+const panelDate=document.getElementById('panel-date');
+const panelTitle=document.getElementById('panel-title');
+const panelEmbed=document.getElementById('panel-embed');
+const panelSummary=document.getElementById('panel-summary');
+
+let activeNode=null;
+
+function openPanel(it, li){
+  const vid=ytVideoId(it.url);
+
+  panelCh.textContent=it.channel;
+  panelDate.textContent=it.date;
+  panelTitle.innerHTML='<a href="'+esc(it.url)+'" target="_blank" rel="noopener">'+esc(it.title)+'</a>';
+  panelEmbed.innerHTML=vid
+    ?'<iframe src="https://www.youtube.com/embed/'+vid+'?autoplay=1" allowfullscreen allow="autoplay"></iframe>'
+    :'';
+  panelSummary.textContent=it.summary||'';
+
+  if(activeNode) activeNode.classList.remove('active');
+  activeNode=li;
+  li.classList.add('active');
+
+  panel.classList.add('open');
+  overlay.classList.add('open');
+}
+
+function closePanel(){
+  panel.classList.remove('open');
+  overlay.classList.remove('open');
+  panelEmbed.innerHTML=''; // stop video
+  if(activeNode){ activeNode.classList.remove('active'); activeNode=null; }
+}
+
+document.getElementById('panel-close').addEventListener('click', closePanel);
+overlay.addEventListener('click', closePanel);
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closePanel(); });
+
+// Resizable panel
+const PANEL_MIN=280, PANEL_MAX=900;
+let panelW=Math.min(PANEL_MAX, Math.max(PANEL_MIN, parseInt(localStorage.getItem('panelW'))||PANEL_MAX));
+
+function applyPanelW(w){
+  panelW=Math.max(PANEL_MIN, Math.min(PANEL_MAX, Math.round(w)));
+  panel.style.width=panelW+'px';
+  localStorage.setItem('panelW', panelW);
+}
+applyPanelW(panelW);
+
+(()=>{
+  const handle=document.getElementById('panel-handle');
+  let dragging=false;
+
+  function startDrag(clientX){
+    dragging=true;
+    panel.classList.add('resizing');
+    document.body.style.cssText+='user-select:none;cursor:ew-resize';
+  }
+  function moveDrag(clientX){
+    if(!dragging) return;
+    applyPanelW(window.innerWidth-clientX);
+  }
+  function endDrag(){
+    if(!dragging) return;
+    dragging=false;
+    panel.classList.remove('resizing');
+    document.body.style.userSelect='';
+    document.body.style.cursor='';
+  }
+
+  handle.addEventListener('mousedown', e=>{ e.preventDefault(); startDrag(e.clientX); });
+  window.addEventListener('mousemove', e=>moveDrag(e.clientX));
+  window.addEventListener('mouseup', endDrag);
+
+  handle.addEventListener('touchstart', e=>{ e.preventDefault(); startDrag(e.touches[0].clientX); },{passive:false});
+  window.addEventListener('touchmove', e=>moveDrag(e.touches[0].clientX),{passive:true});
+  window.addEventListener('touchend', endDrag);
+})();
 
 const BUFFER=3;    // extra grid rows above/below viewport
 const META_H=75;   // px of card below the thumbnail (title + channel + padding)
@@ -660,29 +788,26 @@ function makeItem(it){
         '<span class="date">'+esc(it.date)+'</span>'+
       '</div>'+
     '</div>'+
-    (vid?'<div class="embed"><iframe allowfullscreen></iframe></div>':'')+
-    (!vid&&it.summary?'<div class="sum">'+esc(it.summary)+'</div>':'');
-  li.querySelector('a').addEventListener('click',()=>{
+    '';
+  li.querySelector('a').addEventListener('click', e=>{
+    e.stopPropagation();
     li.querySelector('a').classList.add('seen');
     markSeen(it.url);
   });
-  li.querySelector('.dismiss').addEventListener('click',()=>{
+  li.querySelector('.dismiss').addEventListener('click', e=>{
+    e.stopPropagation();
     markSeen(it.url);
     all=all.filter(x=>x.url!==it.url);
     visible=visible.filter(x=>x.url!==it.url);
+    if(activeNode===li) closePanel();
     reset();
   });
-  if(vid||it.summary){
-    li.addEventListener('click',e=>{
-      if(e.target.tagName==='A'||e.target.classList.contains('dismiss'))return;
-      const opening=!li.classList.contains('open');
-      li.classList.toggle('open');
-      if(vid){
-        const iframe=li.querySelector('iframe');
-        iframe.src=opening?'https://www.youtube.com/embed/'+vid+'?autoplay=1':'';
-      }
-    });
-  }
+  li.addEventListener('click', e=>{
+    if(e.target.classList.contains('dismiss')) return;
+    openPanel(it, li);
+    li.querySelector('a').classList.add('seen');
+    markSeen(it.url);
+  });
   return li;
 }
 
