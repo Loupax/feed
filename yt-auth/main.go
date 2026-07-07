@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"html"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -98,7 +100,11 @@ func saveTokenFile(path string, tok *oauth2.Token) error {
 	return os.WriteFile(path, data, 0600)
 }
 
+var urlsMu sync.Mutex
+
 func appendURLs(urls []string) (added int, err error) {
+	urlsMu.Lock()
+	defer urlsMu.Unlock()
 	outputPath := rssURLsPath()
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
 		return 0, err
@@ -157,6 +163,7 @@ const pageWrap = `<!DOCTYPE html>
   %s
 </body>
 </html>`
+
 
 func renderPage(w http.ResponseWriter, body string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -232,7 +239,7 @@ func registerYouTubeHandlers(mux *http.ServeMux, cfg *oauth2.Config) {
 		msg := r.URL.Query().Get("msg")
 		var notice string
 		if msg != "" {
-			notice = `<p class="success">` + msg + `</p>`
+			notice = `<p class="success">` + html.EscapeString(msg) + `</p>`
 		}
 
 		_, err := loadTokenFile(ytTokenPath())
@@ -305,7 +312,7 @@ func registerRedditHandlers(mux *http.ServeMux) {
 		msg := r.URL.Query().Get("msg")
 		var notice string
 		if msg != "" {
-			notice = `<p class="success">` + msg + `</p>`
+			notice = `<p class="success">` + html.EscapeString(msg) + `</p>`
 		}
 		renderPage(w, fmt.Sprintf(`
 		  <h1>Reddit Subscriptions</h1>
@@ -346,9 +353,11 @@ func registerRedditHandlers(mux *http.ServeMux) {
 
 		var urls []string
 		for _, child := range result.Data.Children {
-			if name := child.Data.DisplayName; name != "" {
-				urls = append(urls, "https://www.reddit.com/r/"+name+".rss")
+			name := child.Data.DisplayName
+			if name == "" || strings.ContainsAny(name, "\r\n") {
+				continue
 			}
+			urls = append(urls, "https://www.reddit.com/r/"+name+".rss")
 		}
 		if len(urls) == 0 {
 			renderPage(w, `<p class="error">No subreddits found in pasted JSON.</p>
@@ -1018,7 +1027,7 @@ func registerImportHandlers(mux *http.ServeMux) {
 			msg := r.URL.Query().Get("msg")
 			var notice string
 			if msg != "" {
-				notice = `<p class="success">` + msg + `</p>`
+				notice = `<p class="success">` + html.EscapeString(msg) + `</p>`
 			}
 			renderPage(w, fmt.Sprintf(`
 			  <h1>Import Feeds</h1>
@@ -1109,12 +1118,16 @@ func main() {
 	registerRedditHandlers(mux)
 	registerImportHandlers(mux)
 
-	srv := &http.Server{Addr: listenAddr, Handler: mux}
+	ln, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	srv := &http.Server{Handler: mux}
 
 	go func() {
 		fmt.Printf("Listening on http://localhost:8080\n")
 		openBrowser("http://localhost:8080")
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
 	}()

@@ -36,14 +36,14 @@ browse() {
 
 new_urls() {
     comm -23 \
-        <(grep -v '^#' "$URLS" | sort) \
+        <(grep -v '^#' "$URLS" | sort -u) \
         <([ -f "$FETCHED_URLS" ] && sort "$FETCHED_URLS" || :)
 }
 
 removed_urls() {
     comm -23 \
         <(sort "$FETCHED_URLS") \
-        <(grep -v '^#' "$URLS" | sort)
+        <(grep -v '^#' "$URLS" | sort -u)
 }
 
 full_refresh() {
