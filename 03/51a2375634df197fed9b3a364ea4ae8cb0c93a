@@ -1,0 +1,26 @@
+feed
+  s_5b3e77e762935a::t_afbede8b23fba1 39,46
+yt-auth/main.go
+  s_5b3e77e762935a::t_8e2bc77b49dc7e 242,315,1030
+  s_5b3e77e762935a::t_84557de006d5da 356-358,360
+  s_5b3e77e762935a::t_e1fa463f863380 1121-1125,1130
+  s_5b3e77e762935a::t_42a8db5f3a1c31 8,10
+  s_5b3e77e762935a::t_f5e8c4ffdc30f4 167
+  s_5b3e77e762935a::t_a7fc1441b49583 103-104,106-107
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "0351a2375634df197fed9b3a364ea4ae8cb0c93a",
+  "prompts": {},
+  "sessions": {
+    "s_5b3e77e762935a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a520ba45-efd0-4330-b4a8-26063ab71d83",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Konstantinos Loupasakis <konstantinos.loupasakis@deliveryhero.com>"
+    }
+  }
+}
