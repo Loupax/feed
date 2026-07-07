@@ -74,6 +74,27 @@ def parse_feed(data):
                 raw = group.findtext(f"{{{NS_MEDIA}}}description") or ""
         return strip_html(raw)
 
+    def thumbnail(entry):
+        # YouTube / Atom: <media:group><media:thumbnail url="..."/>
+        group = entry.find(f"{{{NS_MEDIA}}}group")
+        if group is not None:
+            th = group.find(f"{{{NS_MEDIA}}}thumbnail")
+            if th is not None and th.get("url"):
+                return th.get("url")
+        # direct <media:thumbnail url="..."/>
+        th = entry.find(f"{{{NS_MEDIA}}}thumbnail")
+        if th is not None and th.get("url"):
+            return th.get("url")
+        # <media:content medium="image" url="..."/>
+        for mc in entry.findall(f"{{{NS_MEDIA}}}content"):
+            if mc.get("medium") == "image" or (mc.get("type") or "").startswith("image/"):
+                return mc.get("url", "")
+        # RSS <enclosure type="image/..." url="..."/>
+        enc = entry.find("enclosure")
+        if enc is not None and (enc.get("type") or "").startswith("image/"):
+            return enc.get("url", "")
+        return ""
+
     items = []
 
     if bare_tag == "feed":
@@ -86,7 +107,7 @@ def parse_feed(data):
                 link_el = entry.find("link")
             link = link_el.get("href", "") if link_el is not None else ""
             pub = t(entry, "published") or t(entry, "updated")
-            items.append((parse_date(pub), channel, title.strip(), link.strip(), summary(entry)))
+            items.append((parse_date(pub), channel, title.strip(), link.strip(), summary(entry), thumbnail(entry)))
     else:
         ch = root.find("channel")
         if ch is None:
@@ -97,7 +118,7 @@ def parse_feed(data):
             link = item.findtext("link", "")
             pub = item.findtext("pubDate", "")
             raw = item.findtext("description") or item.findtext("content") or ""
-            items.append((parse_date(pub), channel, title.strip(), link.strip(), strip_html(raw)))
+            items.append((parse_date(pub), channel, title.strip(), link.strip(), strip_html(raw), thumbnail(item)))
 
     return items
 
@@ -117,9 +138,9 @@ def main():
 
     all_items.sort(key=lambda x: x[0], reverse=True)
 
-    for date, channel, title, link, blurb in all_items:
+    for date, channel, title, link, blurb, thumb in all_items:
         date_str = date.strftime("%Y-%m-%d %H:%M") if date != EPOCH else "?          "
-        print(f"{date_str}\t{channel}\t{title}\t{link}\t{blurb.replace(chr(10), r'\n')}")
+        print(f"{date_str}\t{channel}\t{title}\t{link}\t{blurb.replace(chr(10), r'\n')}\t{thumb}")
 
 
 if __name__ == "__main__":
